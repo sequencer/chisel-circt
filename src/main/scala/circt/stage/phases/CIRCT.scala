@@ -15,15 +15,21 @@ import firrtl.{
   EmittedVerilogCircuitAnnotation
 }
 import firrtl.options.{
+  CustomFileEmission,
   Dependency,
   OptionsException,
+  OutputAnnotationFileAnnotation,
   Phase,
   StageError,
   StageOptions,
   StageUtils
 }
+import firrtl.options.phases.WriteOutputAnnotations
 import firrtl.options.Viewer.view
-import firrtl.stage.FirrtlOptions
+import firrtl.stage.{
+  FirrtlOptions,
+  RunFirrtlTransformAnnotation
+}
 
 import scala.sys.process._
 
@@ -47,18 +53,37 @@ class CIRCT extends Phase {
     val firrtlOptions = view[FirrtlOptions](annotations)
     val stageOptions = view[StageOptions](annotations)
 
+    var inliner, blackbox = false
+
+    (new WriteOutputAnnotations).transform(
+      annotations.filter{
+        case _: CustomFileEmission => false
+        case RunFirrtlTransformAnnotation(_: firrtl.passes.InlineInstances) =>
+          inliner = true;
+          false
+        case RunFirrtlTransformAnnotation(_: firrtl.passes.memlib.ReplSeqMem) =>
+          blackbox = true;
+          false
+        case _ => true
+      })
+
     val input: String = firrtlOptions.firrtlCircuit match {
       case None => throw new OptionsException("No input file specified!")
       case Some(circuit) => circuit.serialize
     }
 
     val outputFileName: String = stageOptions.getBuildFileName(firrtlOptions.outputFileName.get)
+    val outputAnnotationFileName: Option[String] =
+      stageOptions.annotationFileOut.map(stageOptions.getBuildFileName(_, Some(".anno.json")))
 
     val binary = "firtool"
 
     val cmd =
       Seq(binary, "-format=fir") ++
         (!circtOptions.disableLowerTypes).option("-lower-types") ++
+        (inliner).option("-inline") ++
+        (blackbox).option("-blackbox-memory") ++
+        (outputAnnotationFileName.map(a => Seq("-annotation-file", a))).getOrElse(Seq.empty) ++
         (circtOptions.target match {
            case Some(CIRCTTarget.FIRRTL) => None
            case Some(CIRCTTarget.HW) => Seq("-lower-to-hw")
