@@ -7,6 +7,7 @@ import chisel3.stage.ChiselGeneratorAnnotation
 import circt.stage.ChiselStage
 
 import firrtl.annotations.DeletedAnnotation
+import firrtl.EmittedVerilogCircuitAnnotation
 import firrtl.stage.FirrtlCircuitAnnotation
 
 import java.io.File
@@ -241,6 +242,46 @@ class ChiselStageSpec extends AnyFunSpec with Matchers {
         .get should include ("""b <= UInt<1>("h1")""")
 
     }
+  }
+
+  describe("ChiselStage custom transform support") {
+
+    it("should work with InlineInstance") {
+
+      import chisel3._
+      import chisel3.util.experimental.InlineInstance
+
+      trait SimpleIO { this: RawModule =>
+        val a = IO(Input(Bool()))
+        val b = IO(Output(Bool()))
+      }
+
+      class Bar extends RawModule with SimpleIO with InlineInstance {
+        b := ~a
+      }
+
+      class Foo extends RawModule with SimpleIO {
+        val bar = Module(new Bar)
+        bar.a := a
+        b := bar.b
+      }
+
+      val targetDir = new File("test_run_dir/InlineInstance")
+
+      val args: Array[String] = Array(
+        "--target", "systemverilog",
+        "--target-dir", targetDir.toString,
+        "--handover", "chirrtl"
+      )
+
+      (new ChiselStage)
+        .execute(args, Seq(ChiselGeneratorAnnotation(() => new Foo)))
+        .collectFirst {
+          case EmittedVerilogCircuitAnnotation(a) => a
+        }.get
+        .value should not include ("module Bar")
+    }
+
   }
 
   describe("ChiselStage$") {
